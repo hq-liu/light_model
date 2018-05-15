@@ -14,13 +14,16 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from shuffle_net.shuffle_net import ShuffleNet
+from torchvision import models
+from torch.nn import functional as F
 
-
+models.densenet201(pretrained=True)
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
+parser.add_argument('--arch', default='densenet', type=str)
 parser.add_argument('--device', default=0, type=int)
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -63,10 +66,12 @@ def main():
                                 world_size=args.world_size)
 
     model = ShuffleNet()
+    # ckpt = torch.load('./shuffle_net/shufflenet.pth.tar', map_location=lambda storage, loc: storage)
+    # model.load_state_dict(ckpt['state_dict'])
     use_gpu = torch.cuda.is_available()
     if use_gpu:
         torch.cuda.set_device(args.device)
-        model = model.cuda()
+        model = torch.nn.DataParallel(model).cuda()
     # if not args.distributed:
     #     if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
     #         model.features = torch.nn.DataParallel(model.features)
@@ -78,11 +83,12 @@ def main():
     #     model = torch.nn.parallel.DistributedDataParallel(model)
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.CrossEntropyLoss()
 
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    # optimizer = torch.optim.SGD(model.parameters(), args.lr,
+    #                             momentum=args.momentum,
+    #                             weight_decay=args.weight_decay)
+    optimizer = torch.optim.RMSprop(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -135,7 +141,7 @@ def main():
         num_workers=args.workers, pin_memory=True)
 
     if args.evaluate:
-        validate(val_loader, model, criterion)
+        validate(val_loader, model, criterion, use_gpu)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -144,10 +150,10 @@ def main():
         adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch)
+        train(train_loader, model, criterion, optimizer, epoch, use_gpu)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion)
+        prec1 = validate(val_loader, model, criterion, use_gpu)
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -161,7 +167,7 @@ def main():
         }, is_best)
 
 
-def train(train_loader, model, criterion, optimizer, epoch):
+def train(train_loader, model, criterion, optimizer, epoch, use_gpu):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -171,21 +177,23 @@ def train(train_loader, model, criterion, optimizer, epoch):
     # switch to train mode
     model.train()
 
+    FloatTensor = torch.cuda.FloatTensor if use_gpu else torch.FloatTensor
+    LongTensor = torch.cuda.LongTensor if use_gpu else torch.LongTensor
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input)
-        target_var = torch.autograd.Variable(target)
+        input_var = torch.autograd.Variable(input).type(FloatTensor)
+        target_var = torch.autograd.Variable(target).type(LongTensor)
 
         # compute output
         output = model(input_var)
+        output = F.softmax(output)
         loss = criterion(output, target_var)
 
         # measure accuracy and record loss
-        prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
+        prec1, prec5 = accuracy(output.data, target_var.data, topk=(1, 5))
         losses.update(loss.data[0], input.size(0))
         top1.update(prec1[0], input.size(0))
         top5.update(prec5[0], input.size(0))
@@ -210,7 +218,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                    data_time=data_time, loss=losses, top1=top1, top5=top5))
 
 
-def validate(val_loader, model, criterion):
+def validate(val_loader, model, criterion, use_gpu):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -219,18 +227,19 @@ def validate(val_loader, model, criterion):
     # switch to evaluate mode
     model.eval()
 
+    FloatTensor = torch.cuda.FloatTensor if use_gpu else torch.FloatTensor
+    LongTensor = torch.cuda.LongTensor if use_gpu else torch.LongTensor
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
-        target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input, volatile=True)
-        target_var = torch.autograd.Variable(target, volatile=True)
+        input_var = torch.autograd.Variable(input, volatile=True).type(FloatTensor)
+        target_var = torch.autograd.Variable(target, volatile=True).type(LongTensor)
 
         # compute output
         output = model(input_var)
         loss = criterion(output, target_var)
 
         # measure accuracy and record loss
-        prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
+        prec1, prec5 = accuracy(output.data, target_var.data, topk=(1, 5))
         losses.update(loss.data[0], input.size(0))
         top1.update(prec1[0], input.size(0))
         top5.update(prec5[0], input.size(0))
@@ -263,7 +272,10 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
 class AverageMeter(object):
     """Computes and stores the average and current value"""
     def __init__(self):
-        self.reset()
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
 
     def reset(self):
         self.val = 0
