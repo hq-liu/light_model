@@ -1,20 +1,28 @@
 import torch.nn as nn
 import math
+from speed_testing.layers_with_time import (
+    Conv2dWithTime, BatchNorm2dWithTime,
+    MaxPool2dWithTime, AvgPool2dWithTime,
+    ReLUWithTime, LinearWithTime, ReLU6WithTime,
+    DropoutWithTime
+)
+import torch
+from torch.autograd import Variable
 
 
 def conv_bn(inp, oup, stride):
     return nn.Sequential(
-        nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
-        nn.BatchNorm2d(oup),
-        nn.ReLU6(inplace=True)
+        Conv2dWithTime(inp, oup, 3, stride, 1, bias=False),
+        BatchNorm2dWithTime(oup),
+        ReLU6WithTime(inplace=True)
     )
 
 
 def conv_1x1_bn(inp, oup):
     return nn.Sequential(
-        nn.Conv2d(inp, oup, 1, 1, 0, bias=False),
-        nn.BatchNorm2d(oup),
-        nn.ReLU6(inplace=True)
+        Conv2dWithTime(inp, oup, 1, 1, 0, bias=False),
+        BatchNorm2dWithTime(oup),
+        ReLU6WithTime(inplace=True)
     )
 
 
@@ -28,16 +36,16 @@ class InvertedResidual(nn.Module):
 
         self.conv = nn.Sequential(
             # pw
-            nn.Conv2d(inp, inp * expand_ratio, 1, 1, 0, bias=False),
-            nn.BatchNorm2d(inp * expand_ratio),
-            nn.ReLU6(inplace=True),
+            Conv2dWithTime(inp, inp * expand_ratio, 1, 1, 0, bias=False),
+            BatchNorm2dWithTime(inp * expand_ratio),
+            ReLU6WithTime(inplace=True),
             # dw
-            nn.Conv2d(inp * expand_ratio, inp * expand_ratio, 3, stride, 1, groups=inp * expand_ratio, bias=False),
-            nn.BatchNorm2d(inp * expand_ratio),
-            nn.ReLU6(inplace=True),
+            Conv2dWithTime(inp * expand_ratio, inp * expand_ratio, 3, stride, 1, groups=inp * expand_ratio, bias=False),
+            BatchNorm2dWithTime(inp * expand_ratio),
+            ReLU6WithTime(inplace=True),
             # pw-linear
-            nn.Conv2d(inp * expand_ratio, oup, 1, 1, 0, bias=False),
-            nn.BatchNorm2d(oup),
+            Conv2dWithTime(inp * expand_ratio, oup, 1, 1, 0, bias=False),
+            BatchNorm2dWithTime(oup),
         )
 
     def forward(self, x):
@@ -78,14 +86,14 @@ class MobileNetV2(nn.Module):
                 input_channel = output_channel
         # building last several layers
         self.features.append(conv_1x1_bn(input_channel, self.last_channel))
-        self.features.append(nn.AvgPool2d(input_size/32))
+        self.features.append(AvgPool2dWithTime(input_size//32))
         # make it nn.Sequential
         self.features = nn.Sequential(*self.features)
 
         # building classifier
         self.classifier = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(self.last_channel, n_class),
+            DropoutWithTime(),
+            LinearWithTime(self.last_channel, n_class),
         )
 
         self._initialize_weights()
@@ -110,4 +118,12 @@ class MobileNetV2(nn.Module):
                 n = m.weight.size(1)
                 m.weight.data.normal_(0, 0.01)
                 m.bias.data.zero_()
+
+
+if __name__ == '__main__':
+    a = torch.randn(1, 3, 224, 224)
+    a = Variable(a)
+    model = MobileNetV2()
+    b = model(a)
+    print(b)
 

@@ -13,7 +13,7 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-from shuffle_net.shuffle_net_alt import ShuffleNet
+from shuffle_net.shuffle_net import ShuffleNet
 from torchvision import models
 from torch.nn import functional as F
 
@@ -88,7 +88,8 @@ def main():
     # optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                             momentum=args.momentum,
     #                             weight_decay=args.weight_decay)
-    optimizer = torch.optim.RMSprop(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # optimizer = torch.optim.RMSprop(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -190,7 +191,7 @@ def train(train_loader, model, criterion, optimizer, epoch, use_gpu):
         # compute output
         output = model(input_var)
         output = F.softmax(output)
-        loss = criterion(output, target_var)
+        loss = criterion(output, target_var, size_average=True)
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target_var.data, topk=(1, 5))

@@ -95,6 +95,34 @@ class ReLUWithTime(nn.ReLU):
         return output
 
 
+class ReLU6WithTime(nn.ReLU6):
+    def __init__(self, inplace=False):
+        super(ReLU6WithTime, self).__init__(inplace=inplace)
+        self.name = 'relu6'
+        self.times = 0
+
+    def forward(self, input):
+        tic = time.time()
+        output = F.relu6(input, self.inplace)
+        toc = time.time()
+        self.times = toc - tic
+        return output
+
+
+class DropoutWithTime(nn.Dropout):
+    def __init__(self, p=0.5, inplace=False):
+        super(DropoutWithTime, self).__init__(p=p, inplace=inplace)
+        self.name = 'dropout'
+        self.times = 0
+
+    def forward(self, input):
+        tic = time.time()
+        output = F.dropout(input, self.p, self.training, self.inplace)
+        toc = time.time()
+        self.times = toc - tic
+        return output
+
+
 class LinearWithTime(nn.Linear):
     def __init__(self, in_features, out_features, bias=True):
         super(LinearWithTime, self).__init__(in_features=in_features,
@@ -112,9 +140,9 @@ class LinearWithTime(nn.Linear):
 
 
 if __name__ == '__main__':
-    a = torch.randn(1, 3, 224, 224)
+    a = torch.randn(1, 100)
     a = Variable(a)
-    model = Conv2dWithTime(3, 4, kernel_size=3, padding=1)
+    model = DropoutWithTime()
     b = model(a)
     types = [Conv2dWithTime, BatchNorm2dWithTime,
     MaxPool2dWithTime, AvgPool2dWithTime,
