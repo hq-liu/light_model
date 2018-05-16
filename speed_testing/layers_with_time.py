@@ -15,7 +15,10 @@ class Conv2dWithTime(nn.Conv2d):
                  padding=0, dilation=1, groups=1, bias=True):
         super(Conv2dWithTime, self).__init__(in_channels, out_channels, kernel_size,
                                              stride, padding, dilation, groups, bias)
-        self.name = 'conv2d'
+        if groups == in_channels:
+            self.name = 'conv2d_' + str(kernel_size) + '_dw'
+        else:
+            self.name = 'conv2d_' + str(kernel_size) + '_' + str(groups)
         self.times = 0
 
     def forward(self, input):
@@ -30,6 +33,7 @@ class Conv2dWithTime(nn.Conv2d):
 class BatchNorm2dWithTime(nn.BatchNorm2d):
     def __init__(self, num_features):
         super(BatchNorm2dWithTime, self).__init__(num_features=num_features)
+        self.name = 'bn'
         self.times = 0
 
     def forward(self, input):
@@ -44,7 +48,9 @@ class BatchNorm2dWithTime(nn.BatchNorm2d):
 class AvgPool2dWithTime(nn.AvgPool2d):
     def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
                  count_include_pad=True):
-        super(AvgPool2dWithTime, self).__init__(kernel_size, stride, padding, ceil_mode, count_include_pad)
+        super(AvgPool2dWithTime, self).__init__(kernel_size, stride, padding,
+                                                ceil_mode, count_include_pad)
+        self.name = 'avg_pool'
         self.times = 0
 
     def forward(self, input):
@@ -62,6 +68,7 @@ class MaxPool2dWithTime(nn.MaxPool2d):
         super(MaxPool2dWithTime, self).__init__(kernel_size=kernel_size, stride=stride, padding=padding,
                                                 dilation=dilation, return_indices=return_indices,
                                                 ceil_mode=ceil_mode)
+        self.name = 'max_pool'
         self.times = 0
 
     def forward(self, input):
@@ -77,6 +84,7 @@ class MaxPool2dWithTime(nn.MaxPool2d):
 class ReLUWithTime(nn.ReLU):
     def __init__(self, inplace=False):
         super(ReLUWithTime, self).__init__(inplace=inplace)
+        self.name = 'relu'
         self.times = 0
 
     def forward(self, input):
@@ -92,6 +100,7 @@ class LinearWithTime(nn.Linear):
         super(LinearWithTime, self).__init__(in_features=in_features,
                                              out_features=out_features,
                                              bias=bias)
+        self.name = 'linear'
         self.times = 0
 
     def forward(self, input):
@@ -107,6 +116,8 @@ if __name__ == '__main__':
     a = Variable(a)
     model = Conv2dWithTime(3, 4, kernel_size=3, padding=1)
     b = model(a)
-    print(model.weight)
-    print(model.times)
+    types = [Conv2dWithTime, BatchNorm2dWithTime,
+    MaxPool2dWithTime, AvgPool2dWithTime,
+    ReLUWithTime, LinearWithTime]
+    print(type(model) in types)
 

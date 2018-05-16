@@ -13,7 +13,7 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-from shuffle_net.shuffle_net import ShuffleNet
+from shuffle_net.shuffle_net_alt import ShuffleNet
 from torchvision import models
 from torch.nn import functional as F
 

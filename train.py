@@ -1,7 +1,7 @@
 import torch
 from torch.autograd import Variable
 from torch import optim, nn
-from shuffle_net.shuffle_net import ShuffleNet
+from shuffle_net.shuffle_net_alt import ShuffleNet
 import argparse
 from torchvision import transforms
 from torchvision import datasets

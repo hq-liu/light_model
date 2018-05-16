@@ -1,4 +1,4 @@
-from shuffle_net.shuffle_net import ShuffleNet
+from shuffle_net.shuffle_net_alt import ShuffleNet
 import torch
 from torch.autograd import Variable
 
