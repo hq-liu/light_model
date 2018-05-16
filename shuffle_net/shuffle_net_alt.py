@@ -17,6 +17,8 @@ class ShuffleNetUnit(nn.Module):
         self.first_1x1_groups = self.groups if grouped_conv else 1
         self.stride = stride
         out_channels = out_channels-in_channels if stride == 2 else out_channels
+        if self.stride == 2:
+            self.avg_pool = nn.AvgPool2d(kernel_size=3, stride=2, padding=1)
 
         self.conv1 = nn.Sequential(
             nn.Conv2d(in_channels=in_channels, out_channels=bottleneck_channels,
@@ -34,21 +36,20 @@ class ShuffleNetUnit(nn.Module):
                       stride=1, kernel_size=1, groups=groups),
             nn.BatchNorm2d(out_channels)
         )
+        self.relu = nn.ReLU(True)
 
     def forward(self, x):
         residual = x
-
         if self.stride == 2:
-            residual = F.avg_pool2d(residual, kernel_size=3,
-                                    stride=2, padding=1)
+            residual = self.avg_pool(x)
         x = self.conv1(x)
         x = self._channel_shuffle(x, self.groups)
         x = self.conv2(x)
         x = self.conv3(x)
         if self.stride == 1:
-            return F.relu(residual+x, inplace=True)
+            return self.relu(residual+x)
         elif self.stride == 2:
-            return F.relu(torch.cat((residual, x), 1), inplace=True)
+            return self.relu(torch.cat((residual, x), 1))
 
     @staticmethod
     def _channel_shuffle(feature_map, groups):
@@ -155,7 +156,7 @@ if __name__ == '__main__':
     model = ShuffleNet()
     conv_count = 0
     for c in model.modules():
-        if isinstance(c, nn.BatchNorm2d):
+        if isinstance(c, nn.Linear):
             conv_count += 1
     print(conv_count)
 

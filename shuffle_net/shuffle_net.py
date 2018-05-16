@@ -41,21 +41,10 @@ def conv1x1(in_channels, out_channels, groups=1):
 
 def channel_shuffle(x, groups):
     batchsize, num_channels, height, width = x.data.size()
-
     channels_per_group = num_channels // groups
-    
-    # reshape
-    x = x.view(batchsize, groups, 
-        channels_per_group, height, width)
-
-    # transpose
-    # - contiguous() required if transpose() is used before view().
-    #   See https://github.com/pytorch/pytorch/issues/764
+    x = x.view(batchsize, groups, channels_per_group, height, width)
     x = torch.transpose(x, 1, 2).contiguous()
-
-    # flatten
     x = x.view(batchsize, -1, height, width)
-
     return x
 
 
@@ -81,6 +70,7 @@ class ShuffleNetUnit(nn.Module):
             # ShuffleUnit Figure 2c
             self.depthwise_stride = 2
             self._combine_func = self._concat
+            self.avg_pool = AvgPool2dWithTime(kernel_size=3, stride=2, padding=1)
             
             # ensure output of concat has the same channels as 
             # original output channels.
@@ -118,6 +108,7 @@ class ShuffleNetUnit(nn.Module):
             batch_norm=True,
             relu=False
             )
+        self.relu = ReLUWithTime(True)
 
     @staticmethod
     def _add(x, out):
@@ -152,8 +143,7 @@ class ShuffleNetUnit(nn.Module):
         residual = x
 
         if self.combine == 'concat':
-            residual = F.avg_pool2d(residual, kernel_size=3, 
-                stride=2, padding=1)
+            residual = self.avg_pool(x)
 
         out = self.g_conv_1x1_compress(x)
         out = channel_shuffle(out, self.groups)
@@ -162,7 +152,8 @@ class ShuffleNetUnit(nn.Module):
         out = self.g_conv_1x1_expand(out)
         
         out = self._combine_func(residual, out)
-        return F.relu(out)
+        # out = self.relu(out)
+        return out
 
 
 class ShuffleNet(nn.Module):
@@ -207,9 +198,13 @@ class ShuffleNet(nn.Module):
                    1x1 Grouped Convolutions""".format(groups))
         
         # Stage 1 always has 24 output channels
-        self.conv1 = conv3x3(self.in_channels,
-                             self.stage_out_channels[1],  # stage 1
-                             stride=2)
+        # self.conv1 = conv3x3(self.in_channels,
+        #                      self.stage_out_channels[1],  # stage 1
+        #                      stride=2)
+        self.conv1 = nn.Sequential(
+            conv3x3(self.in_channels, self.in_channels, stride=2, groups=self.in_channels),
+            conv1x1(self.in_channels, self.stage_out_channels[1])
+        )
         self.maxpool = MaxPool2dWithTime(kernel_size=3, stride=2, padding=1)
 
         # Stage 2
@@ -300,8 +295,8 @@ if __name__ == "__main__":
     a = torch.randn(10, 3, 224, 224)
     a = Variable(a)
     model = ShuffleNet()
-    checkpoint = torch.load('shufflenet.pth.tar', map_location=lambda storage, loc: storage)
-    model.load_state_dict(checkpoint['state_dict'])
+    # checkpoint = torch.load('shufflenet.pth.tar', map_location=lambda storage, loc: storage)
+    # model.load_state_dict(checkpoint['state_dict'])
     tic = time.time()
     b = model(a)
     toc = time.time()
