@@ -8,7 +8,6 @@ from speed_testing.layers_with_time import (
 )
 import torch
 from torch.autograd import Variable
-from torchvision import models
 
 
 def conv_bn(inp, oup, stride):
@@ -35,51 +34,37 @@ class InvertedResidual(nn.Module):
 
         self.use_res_connect = self.stride == 1 and inp == oup
 
-        # self.conv = nn.Sequential(
-        #     # pw
-        #     Conv2dWithTime(inp, inp * expand_ratio, 1, 1, 0, bias=False),
-        #     BatchNorm2dWithTime(inp * expand_ratio),
-        #     ReLU6WithTime(inplace=True),
-        #     # dw
-        #     Conv2dWithTime(inp * expand_ratio, inp * expand_ratio, 3,
-        #                    stride, 1, groups=inp * expand_ratio, bias=False),
-        #     BatchNorm2dWithTime(inp * expand_ratio),
-        #     ReLU6WithTime(inplace=True),
-        #     # pw-linear
-        #     Conv2dWithTime(inp * expand_ratio, oup, 1, 1, 0, bias=False),
-        #     BatchNorm2dWithTime(oup),
-        # )
-        self.pw = nn.Sequential(
+        self.conv = nn.Sequential(
+            # pw
             Conv2dWithTime(inp, inp * expand_ratio, 1, 1, 0, bias=False),
             BatchNorm2dWithTime(inp * expand_ratio),
-            ReLU6WithTime(inplace=True)
-        )
-        self.dw = nn.Sequential(
-            Conv2dWithTime(inp * expand_ratio, inp * expand_ratio, 3, stride, 1, groups=inp * expand_ratio, bias=False),
+            ReLU6WithTime(inplace=True),
+            # dw
+            Conv2dWithTime(inp * expand_ratio, inp * expand_ratio, 3,
+                           stride, 1, groups=inp * expand_ratio, bias=False),
             BatchNorm2dWithTime(inp * expand_ratio),
-            ReLU6WithTime(inplace=True)
+            ReLU6WithTime(inplace=True),
+            # pw-linear
+            Conv2dWithTime(inp * expand_ratio, oup, 1, 1, 0, bias=False),
+            BatchNorm2dWithTime(oup),
         )
-        self.g = inp if self.use_res_connect else 1
-        self.pw_linear = nn.Sequential(
-            Conv2dWithTime(inp * expand_ratio, oup, 1, 1, 0, groups=self.g, bias=False),
-            BatchNorm2dWithTime(oup)
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(oup, oup // 16),
+            nn.ReLU(inplace=True),
+            nn.Linear(oup // 16, oup),
+            nn.Sigmoid()
         )
 
     def forward(self, x):
         if self.use_res_connect:
-            input_data = x
-            x = self.pw(x)
-            # high_way = self.channel_shuffle(x, groups=self.g)
-            # high_way = self.pw_linear(high_way)
-            x = self.dw(x)
-            x = self.channel_shuffle(x, groups=self.g)
-            x = self.pw_linear(x)
-            return x + input_data
+            out = x + self.conv(x)
         else:
-            x = self.pw(x)
-            x = self.dw(x)
-            x = self.pw_linear(x)
-            return x
+            out = self.conv(x)
+        n, c, _, _ = out.size()
+        y = self.avg_pool(out).view(n, c)
+        y = self.fc(y).view(n, c, 1, 1)
+        return y*out
 
     @staticmethod
     def channel_shuffle(x, groups):
@@ -91,9 +76,9 @@ class InvertedResidual(nn.Module):
         return x
 
 
-class MobileNetV2(nn.Module):
+class MobileNetV2_SE(nn.Module):
     def __init__(self, n_class=1000, input_size=224, width_mult=1.):
-        super(MobileNetV2, self).__init__()
+        super(MobileNetV2_SE, self).__init__()
         # setting of inverted residual blocks
         self.interverted_residual_setting = [
             # t, c, n, s
@@ -110,7 +95,15 @@ class MobileNetV2(nn.Module):
         assert input_size % 32 == 0
         input_channel = int(32 * width_mult)
         self.last_channel = int(1280 * width_mult) if width_mult > 1.0 else 1280
-        self.features = [conv_bn(3, input_channel, 2)]
+        self.entry = conv_bn(3, input_channel, 2)
+        self.features = []
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(input_channel, input_channel // 16),
+            nn.ReLU(inplace=True),
+            nn.Linear(input_channel // 16, input_channel),
+            nn.Sigmoid()
+        )
         # building inverted residual blocks
         for t, c, n, s in self.interverted_residual_setting:
             output_channel = int(c * width_mult)
@@ -135,6 +128,11 @@ class MobileNetV2(nn.Module):
         self._initialize_weights()
 
     def forward(self, x):
+        x = self.entry(x)
+        n, c, _, _ = x.size()
+        y = self.avg_pool(x).view(n, c)
+        y = self.fc(y).view(n, c, 1, 1)
+        x = x*y
         x = self.features(x)
         x = x.view(-1, self.last_channel)
         x = self.classifier(x)
@@ -159,7 +157,7 @@ class MobileNetV2(nn.Module):
 if __name__ == '__main__':
     a = torch.randn(1, 3, 224, 224)
     a = Variable(a)
-    model = MobileNetV2()
+    model = MobileNetV2_SE()
     # model.load_state_dict(torch.load('mobilenetv2_718.pth.tar', map_location=lambda storage, loc: storage))
     b = model(a)
     cnt = 0

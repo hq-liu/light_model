@@ -12,6 +12,7 @@ from speed_testing.layers_with_time import (
 )
 from mobile_net.mobile_net_testing import MobileNet
 from mobile_net.mobile_net_v2 import MobileNetV2
+from mobile_net.mobile_net_v2_alt import MobileNetV2_alt
 from torch import nn
 
 
@@ -74,18 +75,20 @@ def cul_module_run_time(module_name, model, tensor):
 
 if __name__ == '__main__':
     # shuffle_net = ShuffleNet()
-    mobile_net = MobileNet()
-    # mobile_net_v2 = MobileNetV2()
+    # mobile_net = MobileNet()
+    mobile_net_v2 = MobileNetV2()
+    mobile_net_v2_alt = MobileNetV2_alt()
     # plot_times(mobile_net, 'mobile_net')
     # plot_times(mobile_net, 'mobile_net')
-    # plot_times(mobile_net_v2, 'mobile_net_v2')
-    a = torch.randn(10, 50, 200, 200)
-    a = Variable(a)
-    cul_module_run_time('dw_s1', nn.Conv2d(50, 50, kernel_size=3, groups=50, stride=1), a)
-    cul_module_run_time('dw_s2', nn.Conv2d(50, 50, kernel_size=3, groups=50, stride=2, padding=1), a)
-    cul_module_run_time('pw', nn.Conv2d(50, 100, kernel_size=1, groups=1, stride=1), a)
-    cul_module_run_time('conv_s1', nn.Conv2d(50, 100, kernel_size=3, groups=1, stride=1), a)
-    cul_module_run_time('conv_s2', nn.Conv2d(50, 100, kernel_size=3, groups=1, stride=2, padding=1), a)
+    plot_times(mobile_net_v2, 'mobile_net_v2')
+    plot_times(mobile_net_v2_alt, 'mobile_net_v2_alt')
+    # a = torch.randn(10, 50, 200, 200)
+    # a = Variable(a)
+    # cul_module_run_time('dw_s1', nn.Conv2d(50, 50, kernel_size=3, groups=50, stride=1), a)
+    # cul_module_run_time('dw_s2', nn.Conv2d(50, 50, kernel_size=3, groups=50, stride=2, padding=1), a)
+    # cul_module_run_time('pw', nn.Conv2d(50, 100, kernel_size=1, groups=1, stride=1), a)
+    # cul_module_run_time('conv_s1', nn.Conv2d(50, 100, kernel_size=5, groups=1, stride=1), a)
+    # cul_module_run_time('conv_s2', nn.Conv2d(50, 100, kernel_size=3, groups=1, stride=2, padding=1), a)
     # cul_module_run_time('relu', nn.ReLU(), a)
     # cul_module_run_time('relu(inplace)', nn.ReLU(True), a)
     # cul_module_run_time('relu6', nn.ReLU6(), a)
