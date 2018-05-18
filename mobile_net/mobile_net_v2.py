@@ -124,6 +124,12 @@ if __name__ == '__main__':
     a = torch.randn(1, 3, 224, 224)
     a = Variable(a)
     model = MobileNetV2()
+    model.load_state_dict(torch.load('mobilenetv2_718.pth.tar', map_location=lambda storage, loc: storage))
     b = model(a)
-    print(b)
+    cnt = 0
+    for c in model.modules():
+        if isinstance(c, ReLUWithTime):
+            print(c.name)
+
+    print(b, cnt)
 

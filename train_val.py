@@ -51,6 +51,8 @@ parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
                     help='url used to set up distributed training')
 parser.add_argument('--dist-backend', default='gloo', type=str,
                     help='distributed backend')
+parser.add_argument('--cn', '--checkpoint_name', default='model.pth', type=str)
+parser.add_argument('--lr_decay', default=0.999, type=float)
 
 best_prec1 = 0
 
@@ -66,8 +68,8 @@ def main():
                                 world_size=args.world_size)
 
     model = ShuffleNet()
-    # ckpt = torch.load('./shuffle_net/shufflenet.pth.tar', map_location=lambda storage, loc: storage)
-    # model.load_state_dict(ckpt['state_dict'])
+    ckpt = torch.load('./shuffle_net/shufflenet.pth.tar', map_location=lambda storage, loc: storage)
+    model.load_state_dict(ckpt['state_dict'])
     use_gpu = torch.cuda.is_available()
     if use_gpu:
         torch.cuda.set_device(args.device)
@@ -83,7 +85,7 @@ def main():
     #     model = torch.nn.parallel.DistributedDataParallel(model)
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(size_average=True)
 
     # optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                             momentum=args.momentum,
@@ -105,7 +107,7 @@ def main():
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    cudnn.benchmark = True
+    # cudnn.benchmark = True
 
     # Data loading code
     traindir = os.path.join(args.data, 'train')
@@ -152,6 +154,8 @@ def main():
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, use_gpu)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = param_group['lr'] * args.lr_decay
 
         # evaluate on validation set
         prec1 = validate(val_loader, model, criterion, use_gpu)
@@ -190,8 +194,7 @@ def train(train_loader, model, criterion, optimizer, epoch, use_gpu):
 
         # compute output
         output = model(input_var)
-        output = F.softmax(output)
-        loss = criterion(output, target_var, size_average=True)
+        loss = criterion(output, target_var)
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target_var.data, topk=(1, 5))
@@ -217,6 +220,8 @@ def train(train_loader, model, criterion, optimizer, epoch, use_gpu):
                   'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, top1=top1, top5=top5))
+        if i % (args.print_freq*10) == 0:
+            torch.save(model.state_dict(), './checkpoint/'+args.cn)
 
 
 def validate(val_loader, model, criterion, use_gpu):

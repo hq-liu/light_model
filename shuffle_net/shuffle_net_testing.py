@@ -7,12 +7,13 @@ from torch.nn import init
 from speed_testing.layers_with_time import (
     Conv2dWithTime, BatchNorm2dWithTime,
     MaxPool2dWithTime, AvgPool2dWithTime,
-    ReLUWithTime, LinearWithTime
+    ReLU6WithTime, LinearWithTime
 )
 import time
 
 
-def conv3x3(in_channels, out_channels, stride=1,
+def conv3x3(in_channels, out_channels,
+            stride=1,
             padding=1, bias=True, groups=1):
     """3x3 convolution with padding
     """
@@ -52,7 +53,7 @@ def channel_shuffle(x, groups):
 
 
 class ShuffleNetUnit(nn.Module):
-    def __init__(self, in_channels, out_channels, groups=3,
+    def __init__(self, in_channels, out_channels, module_name, groups=3,
                  grouped_conv=True, combine='add'):
 
         super(ShuffleNetUnit, self).__init__()
@@ -63,6 +64,7 @@ class ShuffleNetUnit(nn.Module):
         self.combine = combine
         self.groups = groups
         self.bottleneck_channels = self.out_channels // 4
+        self.module_name = module_name
 
         # define the type of ShuffleUnit
         if self.combine == 'add':
@@ -74,7 +76,7 @@ class ShuffleNetUnit(nn.Module):
             self.depthwise_stride = 2
             self._combine_func = self._concat
             self.avg_pool = AvgPool2dWithTime(kernel_size=3, stride=2, padding=1)
-
+            self.avg_pool.name = self.module_name + '_' + self.avg_pool.layer_type
             # ensure output of concat has the same channels as
             # original output channels.
             self.out_channels -= self.in_channels
@@ -93,14 +95,17 @@ class ShuffleNetUnit(nn.Module):
             self.bottleneck_channels,
             self.first_1x1_groups,
             batch_norm=True,
-            relu=True
+            relu=True,
+            layer_name=self.module_name+'_1'
         )
 
         # 3x3 depthwise convolution followed by batch normalization
         self.depthwise_conv3x3 = conv3x3(
             self.bottleneck_channels, self.bottleneck_channels,
             stride=self.depthwise_stride, groups=self.bottleneck_channels, bias=False)
+        self.depthwise_conv3x3.name = self.module_name + '_' + self.depthwise_conv3x3.layer_type
         self.bn_after_depthwise = BatchNorm2dWithTime(self.bottleneck_channels)
+        self.bn_after_depthwise.name = self.module_name + '_' + self.bn_after_depthwise.name
 
         # Use 1x1 grouped convolution to expand from
         # bottleneck_channels to out_channels
@@ -109,9 +114,11 @@ class ShuffleNetUnit(nn.Module):
             self.out_channels,
             self.groups,
             batch_norm=True,
-            relu=False
+            relu=False,
+            layer_name=self.module_name+'_2'
         )
-        self.relu = ReLUWithTime(True)
+        self.relu = ReLU6WithTime(True)
+        self.relu.name = self.module_name + '_' + self.relu.layer_type
 
     @staticmethod
     def _add(x, out):
@@ -124,18 +131,21 @@ class ShuffleNetUnit(nn.Module):
         return torch.cat((x, out), 1)
 
     @staticmethod
-    def _make_grouped_conv1x1(in_channels, out_channels, groups,
+    def _make_grouped_conv1x1(in_channels, out_channels, groups, layer_name,
                               batch_norm=True, relu=False, bias=False):
 
         modules = OrderedDict()
 
         conv = conv1x1(in_channels, out_channels, groups=groups, bias=bias)
+        conv.name = layer_name + '_' + conv.layer_type
         modules['conv1x1'] = conv
 
         if batch_norm:
             modules['batch_norm'] = BatchNorm2dWithTime(out_channels)
+            modules['batch_norm'].name = layer_name + '_' + modules['batch_norm'].layer_type
         if relu:
-            modules['relu'] = ReLUWithTime(True)
+            modules['relu'] = ReLU6WithTime(True)
+            modules['relu'].name = layer_name + '_' + modules['relu'].layer_type
         if len(modules) > 1:
             return nn.Sequential(modules)
         else:
@@ -204,11 +214,13 @@ class ShuffleNet(nn.Module):
         self.conv1 = conv3x3(self.in_channels,
                              self.stage_out_channels[1],  # stage 1
                              stride=2)
+        self.conv1.name = 'conv1_' + self.conv1.layer_type
         # self.conv1 = nn.Sequential(
         #     conv3x3(self.in_channels, self.in_channels, stride=2, groups=self.in_channels),
         #     conv1x1(self.in_channels, self.stage_out_channels[1])
         # )
         self.maxpool = MaxPool2dWithTime(kernel_size=3, stride=2, padding=1)
+        self.maxpool.name = 'maxpool' + self.maxpool.layer_type
 
         # Stage 2
         self.stage2 = self._make_stage(2)
@@ -224,7 +236,9 @@ class ShuffleNet(nn.Module):
         # Fully-connected classification layer
         num_inputs = self.stage_out_channels[-1]
         self.global_pool = AvgPool2dWithTime(kernel_size=7)
+        self.global_pool.name = 'global_pool_' + self.global_pool.layer_type
         self.fc = LinearWithTime(num_inputs, self.num_classes)
+        self.fc.name = 'fc_' + self.fc.layer_type
         self.init_params()
 
     def init_params(self):
@@ -256,7 +270,8 @@ class ShuffleNet(nn.Module):
             self.stage_out_channels[stage],
             groups=self.groups,
             grouped_conv=grouped_conv,
-            combine='concat'
+            combine='concat',
+            module_name=stage_name + "_0"
         )
         modules[stage_name + "_0"] = first_module
 
@@ -268,7 +283,8 @@ class ShuffleNet(nn.Module):
                 self.stage_out_channels[stage],
                 groups=self.groups,
                 grouped_conv=True,
-                combine='add'
+                combine='add',
+                module_name=name
             )
             modules[name] = module
 

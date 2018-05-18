@@ -7,7 +7,7 @@ from torch.nn import init
 from speed_testing.layers_with_time import (
     Conv2dWithTime, BatchNorm2dWithTime,
     MaxPool2dWithTime, AvgPool2dWithTime,
-    ReLUWithTime, LinearWithTime
+    LinearWithTime, ReLU6WithTime
 )
 import time
 
@@ -108,7 +108,7 @@ class ShuffleNetUnit(nn.Module):
             batch_norm=True,
             relu=False
             )
-        self.relu = ReLUWithTime(True)
+        self.relu = ReLU6WithTime(True)
 
     @staticmethod
     def _add(x, out):
@@ -132,7 +132,7 @@ class ShuffleNetUnit(nn.Module):
         if batch_norm:
             modules['batch_norm'] = BatchNorm2dWithTime(out_channels)
         if relu:
-            modules['relu'] = ReLUWithTime(True)
+            modules['relu'] = ReLU6WithTime(True)
         if len(modules) > 1:
             return nn.Sequential(modules)
         else:
@@ -303,7 +303,7 @@ if __name__ == "__main__":
     times = {}
     types = [Conv2dWithTime, BatchNorm2dWithTime,
              MaxPool2dWithTime, AvgPool2dWithTime,
-             ReLUWithTime, LinearWithTime]
+             ReLU6WithTime, LinearWithTime]
     conv_count = 0
     for c in model.modules():
         if isinstance(c, Conv2dWithTime):
