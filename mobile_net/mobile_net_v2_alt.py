@@ -133,7 +133,7 @@ class MobileNetV2_alt(nn.Module):
 if __name__ == '__main__':
     a = torch.randn(1, 3, 224, 224)
     a = Variable(a)
-    model = MobileNetV2()
+    model = MobileNetV2_alt()
     # model.load_state_dict(torch.load('mobilenetv2_718.pth.tar', map_location=lambda storage, loc: storage))
     b = model(a)
     cnt = 0

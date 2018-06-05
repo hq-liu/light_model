@@ -1,70 +1,179 @@
 import torch
-from torch import nn
-from torch.nn import functional as F
+import torch.nn as nn
+import torch.nn.functional as F
 from collections import OrderedDict
-import time
-import torchvision
-from mobile_net.mobile_net import MobileNet
-from torch.autograd import Variable
+from torch.nn import init
 
 
-class ShuffleNetUnit(nn.Module):
-    def __init__(self, in_channels, out_channels, stride, groups=3,
-                 grouped_conv=True):
-        super(ShuffleNetUnit, self).__init__()
-        bottleneck_channels = in_channels // 4
+def conv3x3(in_channels, out_channels, stride=1,
+            padding=1, bias=True, groups=1):
+    """3x3 convolution with padding
+    """
+    return nn.Conv2d(
+        in_channels,
+        out_channels,
+        kernel_size=3,
+        stride=stride,
+        padding=padding,
+        bias=bias,
+        groups=groups)
+
+
+def conv1x1(in_channels, out_channels, groups=1):
+    """1x1 convolution with padding
+    - Normal pointwise convolution When groups == 1
+    - Grouped pointwise convolution when groups > 1
+    """
+    return nn.Conv2d(
+        in_channels,
+        out_channels,
+        kernel_size=1,
+        groups=groups,
+        stride=1)
+
+
+def channel_shuffle(x, groups):
+    batchsize, num_channels, height, width = x.data.size()
+
+    channels_per_group = num_channels // groups
+
+    # reshape
+    x = x.view(batchsize, groups,
+               channels_per_group, height, width)
+
+    # transpose
+    # - contiguous() required if transpose() is used before view().
+    #   See https://github.com/pytorch/pytorch/issues/764
+    x = torch.transpose(x, 1, 2).contiguous()
+
+    # flatten
+    x = x.view(batchsize, -1, height, width)
+
+    return x
+
+
+class ShuffleUnit(nn.Module):
+    def __init__(self, in_channels, out_channels, groups=3,
+                 grouped_conv=True, combine='add'):
+
+        super(ShuffleUnit, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.grouped_conv = grouped_conv
+        self.combine = combine
         self.groups = groups
+        self.bottleneck_channels = self.out_channels // 4
+
+        # define the type of ShuffleUnit
+        if self.combine == 'add':
+            # ShuffleUnit Figure 2b
+            self.depthwise_stride = 1
+            self._combine_func = self._add
+        elif self.combine == 'concat':
+            # ShuffleUnit Figure 2c
+            self.depthwise_stride = 2
+            self._combine_func = self._concat
+
+            # ensure output of concat has the same channels as
+            # original output channels.
+            self.out_channels -= self.in_channels
+        else:
+            raise ValueError("Cannot combine tensors with \"{}\"" \
+                             "Only \"add\" and \"concat\" are" \
+                             "supported".format(self.combine))
+
+        # Use a 1x1 grouped or non-grouped convolution to reduce input channels
+        # to bottleneck channels, as in a ResNet bottleneck module.
+        # NOTE: Do not use group convolution for the first conv1x1 in Stage 2.
         self.first_1x1_groups = self.groups if grouped_conv else 1
-        self.stride = stride
-        out_channels = out_channels-in_channels if stride == 2 else out_channels
-        if self.stride == 2:
-            self.avg_pool = nn.AvgPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(in_channels=in_channels, out_channels=bottleneck_channels,
-                      kernel_size=1, stride=1, groups=self.first_1x1_groups),
-            nn.BatchNorm2d(bottleneck_channels),
-            nn.ReLU(inplace=True)
+        self.g_conv_1x1_compress = self._make_grouped_conv1x1(
+            self.in_channels,
+            self.bottleneck_channels,
+            self.first_1x1_groups,
+            batch_norm=True,
+            relu=True
         )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(in_channels=bottleneck_channels, out_channels=bottleneck_channels,
-                      stride=stride, kernel_size=3, groups=bottleneck_channels, padding=1),
-            nn.BatchNorm2d(bottleneck_channels)
-        )
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(in_channels=bottleneck_channels, out_channels=out_channels,
-                      stride=1, kernel_size=1, groups=groups),
-            nn.BatchNorm2d(out_channels)
-        )
-        self.relu = nn.ReLU(True)
 
-    def forward(self, x):
-        residual = x
-        if self.stride == 2:
-            residual = self.avg_pool(x)
-        x = self.conv1(x)
-        x = self._channel_shuffle(x, self.groups)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        if self.stride == 1:
-            return self.relu(residual+x)
-        elif self.stride == 2:
-            return self.relu(torch.cat((residual, x), 1))
+        # 3x3 depthwise convolution followed by batch normalization
+        self.depthwise_conv3x3 = conv3x3(
+            self.bottleneck_channels, self.bottleneck_channels,
+            stride=self.depthwise_stride, groups=self.bottleneck_channels)
+        self.bn_after_depthwise = nn.BatchNorm2d(self.bottleneck_channels)
+
+        # Use 1x1 grouped convolution to expand from
+        # bottleneck_channels to out_channels
+        self.g_conv_1x1_expand = self._make_grouped_conv1x1(
+            self.bottleneck_channels,
+            self.out_channels,
+            self.groups,
+            batch_norm=True,
+            relu=False
+        )
 
     @staticmethod
-    def _channel_shuffle(feature_map, groups):
-        N, C, H, W = feature_map.size()
-        assert C % groups == 0, "Channel must be divisible by groups"
-        channels_per_group = C // groups
-        feature_map = feature_map.view(N, groups, channels_per_group, H, W)
-        feature_map = torch.transpose(feature_map, 1, 2).contiguous()
-        feature_map = feature_map.view(N, -1, H, W)
-        return feature_map
+    def _add(x, out):
+        # residual connection
+        return x + out
+
+    @staticmethod
+    def _concat(x, out):
+        # concatenate along channel axis
+        return torch.cat((x, out), 1)
+
+    def _make_grouped_conv1x1(self, in_channels, out_channels, groups,
+                              batch_norm=True, relu=False):
+
+        modules = OrderedDict()
+
+        conv = conv1x1(in_channels, out_channels, groups=groups)
+        modules['conv1x1'] = conv
+
+        if batch_norm:
+            modules['batch_norm'] = nn.BatchNorm2d(out_channels)
+        if relu:
+            modules['relu'] = nn.ReLU()
+        if len(modules) > 1:
+            return nn.Sequential(modules)
+        else:
+            return conv
+
+    def forward(self, x):
+        # save for combining later with output
+        residual = x
+
+        if self.combine == 'concat':
+            residual = F.avg_pool2d(residual, kernel_size=3,
+                                    stride=2, padding=1)
+
+        out = self.g_conv_1x1_compress(x)
+        out = channel_shuffle(out, self.groups)
+        out = self.depthwise_conv3x3(out)
+        out = self.bn_after_depthwise(out)
+        out = self.g_conv_1x1_expand(out)
+
+        out = self._combine_func(residual, out)
+        return F.relu(out)
 
 
 class ShuffleNet(nn.Module):
+    """ShuffleNet implementation.
+    """
+
     def __init__(self, groups=3, in_channels=3, num_classes=1000):
+        """ShuffleNet constructor.
+        Arguments:
+            groups (int, optional): number of groups to be used in grouped
+                1x1 convolutions in each ShuffleUnit. Default is 3 for best
+                performance according to original paper.
+            in_channels (int, optional): number of channels in the input tensor.
+                Default is 3 for RGB image inputs.
+            num_classes (int, optional): number of classes to predict. Default
+                is 1000 for ImageNet.
+        """
         super(ShuffleNet, self).__init__()
+
         self.groups = groups
         self.stage_repeats = [3, 7, 3]
         self.in_channels = in_channels
@@ -86,14 +195,42 @@ class ShuffleNet(nn.Module):
             raise ValueError(
                 """{} groups is not supported for
                    1x1 Grouped Convolutions""".format(groups))
-        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=self.stage_out_channels[1],
-                               kernel_size=3, stride=2)
-        self.max_pool1 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.stage_2 = self._make_stage(2)
-        self.stage_3 = self._make_stage(3)
-        self.stage_4 = self._make_stage(4)
-        self.global_pool = nn.AvgPool2d(kernel_size=7)
-        self.fc = nn.Linear(in_features=self.stage_out_channels[-1], out_features=num_classes)
+
+        # Stage 1 always has 24 output channels
+        self.conv1 = conv3x3(self.in_channels,
+                             self.stage_out_channels[1],  # stage 1
+                             stride=2)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+        # Stage 2
+        self.stage2 = self._make_stage(2)
+        # Stage 3
+        self.stage3 = self._make_stage(3)
+        # Stage 4
+        self.stage4 = self._make_stage(4)
+
+        # Global pooling:
+        # Undefined as PyTorch's functional API can be used for on-the-fly
+        # shape inference if input size is not ImageNet's 224x224
+
+        # Fully-connected classification layer
+        num_inputs = self.stage_out_channels[-1]
+        self.fc = nn.Linear(num_inputs, self.num_classes)
+        self.init_params()
+
+    def init_params(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                init.kaiming_normal_(m.weight, mode='fan_out')
+                if m.bias is not None:
+                    init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                init.constant_(m.weight, 1)
+                init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                init.normal_(m.weight, std=0.001)
+                if m.bias is not None:
+                    init.constant_(m.bias, 0)
 
     def _make_stage(self, stage):
         modules = OrderedDict()
@@ -105,24 +242,24 @@ class ShuffleNet(nn.Module):
         grouped_conv = stage > 2
 
         # 2. concatenation unit is always used.
-        first_module = ShuffleNetUnit(
-            in_channels=self.stage_out_channels[stage - 1],
-            out_channels=self.stage_out_channels[stage],
+        first_module = ShuffleUnit(
+            self.stage_out_channels[stage - 1],
+            self.stage_out_channels[stage],
             groups=self.groups,
             grouped_conv=grouped_conv,
-            stride=2
+            combine='concat'
         )
         modules[stage_name + "_0"] = first_module
 
         # add more ShuffleUnits depending on pre-defined number of repeats
         for i in range(self.stage_repeats[stage - 2]):
             name = stage_name + "_{}".format(i + 1)
-            module = ShuffleNetUnit(
+            module = ShuffleUnit(
                 self.stage_out_channels[stage],
                 self.stage_out_channels[stage],
                 groups=self.groups,
                 grouped_conv=True,
-                stride=1
+                combine='add'
             )
             modules[name] = module
 
@@ -130,34 +267,23 @@ class ShuffleNet(nn.Module):
 
     def forward(self, x):
         x = self.conv1(x)
-        x = self.max_pool1(x)
-        x = self.stage_2(x)
-        x = self.stage_3(x)
-        x = self.stage_4(x)
-        x = self.global_pool(x)
+        x = self.maxpool(x)
+
+        x = self.stage2(x)
+        x = self.stage3(x)
+        x = self.stage4(x)
+
+        # global average pooling layer
+        x = F.avg_pool2d(x, x.data.size()[-2:])
+
+        # flatten for input to fully-connected layer
         x = x.view(x.size(0), -1)
         x = self.fc(x)
-        return x
+
+        return F.log_softmax(x, dim=1)
 
 
-def cul_time(model, batch_size):
-    a = torch.randn(batch_size, 3, 224, 224)
-    a = Variable(a)
-    tic = time.time()
-    b = model(a)
-    toc = time.time()
-    print(int(round((toc-tic)*1000)))
-    print(b.size())
-
-
-if __name__ == '__main__':
-    # unit = ShuffleNetUnit(in_channels=240, out_channels=480, stride=2)
-
+if __name__ == "__main__":
+    """Testing
+    """
     model = ShuffleNet()
-    conv_count = 0
-    for c in model.modules():
-        if isinstance(c, nn.Linear):
-            conv_count += 1
-    print(conv_count)
-
-
