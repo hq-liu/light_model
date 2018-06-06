@@ -13,6 +13,7 @@ import torch.utils.data.distributed
 from torchvision import transforms
 from torch.nn import functional as F
 from new_model.new_model import NewModel
+from shuffle_net.shuffle_net import ShuffleNet
 from torchvision import datasets
 
 
@@ -30,9 +31,16 @@ parser.add_argument('--print-freq', '-p', default=10, type=int)
 
 
 def main():
-    global args
+    global args, best_prec1
+    best_prec1 = 0
     args = parser.parse_args()
     model = NewModel()
+    if args.r:
+        ckpt = torch.load("./checkpoint/new_model.pth", map_location=lambda storage, loc: storage)
+        sd = model.state_dict()
+        for k in sd.keys():
+            sd[k] = ckpt["module."+k]
+        model.load_state_dict(sd)
 
     use_gpu = torch.cuda.is_available()
     global FloatTensor, LongTensor
@@ -79,18 +87,23 @@ def main():
             param_group['lr'] = param_group['lr'] * args.lr_decay
 
         # evaluate on validation set
-        validate(val_loader, model, criterion)
+        prec1 = validate(val_loader, model, criterion)
         #
         # # remember best prec@1 and save checkpoint
-        # is_best = prec1 > best_prec1
-        # best_prec1 = max(prec1, best_prec1)
-        # save_checkpoint({
-        #     'epoch': epoch + 1,
-        #     'arch': args.arch,
-        #     'state_dict': model.state_dict(),
-        #     'best_prec1': best_prec1,
-        #     'optimizer': optimizer.state_dict(),
-        # }, is_best)
+        is_best = prec1 > best_prec1
+        best_prec1 = max(prec1, best_prec1)
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'state_dict': model.state_dict(),
+            'best_prec1': best_prec1,
+            'optimizer': optimizer.state_dict(),
+        }, filename=args.cn+"_"+str(epoch)+".pth", is_best=is_best)
+
+
+def save_checkpoint(state, filename='checkpoint.pth.tar', is_best=False):
+    torch.save(state, "./checkpoint/"+filename)
+    if is_best:
+        shutil.copyfile(filename, 'model_best.pth.tar')
 
 
 def train(model, train_loader, criterion, optimizer, epoch):
@@ -179,6 +192,7 @@ def validate(val_loader, model, criterion):
 
     print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
           .format(top1=top1, top5=top5))
+    return top1.avg
 
 
 class AverageMeter(object):

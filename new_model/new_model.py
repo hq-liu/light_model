@@ -2,6 +2,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn import init
+from shuffle_net.shuffle_net import ShuffleNet
+import time
 
 
 class NewModelBlock(nn.Module):
@@ -15,6 +17,8 @@ class NewModelBlock(nn.Module):
             self.conv1 = nn.Sequential(
                 nn.Conv2d(in_channels=inp, out_channels=self.bottle_neck_channel,
                           kernel_size=1, groups=self.bottle_neck_channel),
+                nn.BatchNorm2d(self.bottle_neck_channel),
+                nn.ReLU6(True),
                 nn.Conv2d(in_channels=self.bottle_neck_channel,
                           out_channels=self.bottle_neck_channel,
                           kernel_size=1, groups=3),
@@ -35,12 +39,25 @@ class NewModelBlock(nn.Module):
                       stride=stride, padding=1),
             nn.BatchNorm2d(self.bottle_neck_channel)
         )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(in_channels=self.bottle_neck_channel,
-                      out_channels=self.oup, kernel_size=1,
-                      groups=3),
-            nn.BatchNorm2d(self.oup)
-        )
+        if stride == 1:
+            self.conv2 = nn.Sequential(
+                nn.Conv2d(in_channels=self.bottle_neck_channel,
+                          out_channels=self.bottle_neck_channel, kernel_size=1,
+                          groups=3),
+                nn.BatchNorm2d(self.bottle_neck_channel),
+                nn.ReLU6(True),
+                nn.Conv2d(in_channels=self.bottle_neck_channel,
+                          out_channels=self.oup, kernel_size=1,
+                          groups=self.bottle_neck_channel),
+                nn.BatchNorm2d(self.oup)
+            )
+        else:
+            self.conv2 = nn.Sequential(
+                nn.Conv2d(in_channels=self.bottle_neck_channel,
+                          out_channels=self.oup, kernel_size=1,
+                          groups=3),
+                nn.BatchNorm2d(self.oup)
+            )
 
     def _combine_function(self, x, y):
         if self.stride == 1:
@@ -129,7 +146,7 @@ class NewModel(nn.Module):
         x = self.stage4(x)
 
         # global average pooling layer
-        x = F.avg_pool2d(x, x.data.size()[-2:])
+        x = F.adaptive_avg_pool2d(x, 1)
 
         # flatten for input to fully-connected layer
         x = x.view(x.size(0), -1)
@@ -138,8 +155,20 @@ class NewModel(nn.Module):
         return x
 
 
+def cul_module_run_time(module_name, model, tensor):
+    tic = time.time()
+    tensor = model(tensor)
+    toc = time.time()
+    print(module_name+': Run time: {:.6f}'.format(toc-tic))
+
+
 if __name__ == '__main__':
-    a = torch.randn(1, 3, 224, 224)
+    a = torch.randn(100, 3, 224, 224)
     model = NewModel()
-    b = model(a)
-    print(b.size())
+    model2 = ShuffleNet()
+    # cul_module_run_time("shuffle_net", model2, a)
+    # cul_module_run_time("new_model", model, a)
+    torch.save(model.state_dict(), "./checkpoint/model1.pth")
+    torch.save(model2.state_dict(), "./checkpoint/model2.pth")
+
+

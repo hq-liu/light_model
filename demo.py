@@ -23,25 +23,27 @@ def channel_shuffle(x, groups):
     return x
 
 
+bottle_neck_channel=60
 model1 = nn.Sequential(
-    nn.Conv2d(in_channels=240, out_channels=60, kernel_size=1, groups=60),
-    nn.Conv2d(in_channels=60, out_channels=60, kernel_size=1),
-    nn.BatchNorm2d(60),
-    nn.ReLU6(True),
-    nn.Conv2d(in_channels=60, out_channels=60, kernel_size=3, groups=60, padding=1),
-    nn.BatchNorm2d(60),
-    nn.Conv2d(in_channels=60, out_channels=60, kernel_size=1),
-    nn.Conv2d(in_channels=60, out_channels=240, kernel_size=1, groups=60)
+                nn.Conv2d(in_channels=240, out_channels=bottle_neck_channel,
+                          kernel_size=1, groups=bottle_neck_channel),
+                nn.BatchNorm2d(bottle_neck_channel),
+                nn.ReLU6(True),
+                nn.Conv2d(in_channels=bottle_neck_channel,
+                          out_channels=bottle_neck_channel,
+                          kernel_size=1, groups=3),
+                nn.BatchNorm2d(bottle_neck_channel),
+                nn.ReLU6(True)
 )
-conv1 = nn.Conv2d(in_channels=240, out_channels=60, kernel_size=1, groups=3)
-model2 = nn.Sequential(
-    nn.BatchNorm2d(60),
-    nn.ReLU6(True),
-    nn.Conv2d(in_channels=60, out_channels=60, kernel_size=3, groups=60, padding=1),
-    nn.BatchNorm2d(60),
-    nn.Conv2d(in_channels=60, out_channels=240, kernel_size=1, groups=3)
-)
+print(model1[3].weight.size())
 
+model2 = nn.Sequential(
+                nn.Conv2d(in_channels=240, out_channels=bottle_neck_channel,
+                          kernel_size=1, groups=3),
+                nn.BatchNorm2d(bottle_neck_channel),
+                nn.ReLU6(True)
+)
+print(model2[0].weight.size())
 a = torch.randn(10, 240, 56, 56)
 tic = time.time()
 b = model1(a)
@@ -49,9 +51,7 @@ toc = time.time()
 print(toc-tic)
 
 tic = time.time()
-c = conv1(a)
-c = channel_shuffle(c, groups=3)
-c = model2(c)
+c = model2(a)
 toc = time.time()
 print(toc-tic)
 
